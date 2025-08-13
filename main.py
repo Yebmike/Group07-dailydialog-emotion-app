@@ -62,9 +62,9 @@ ID_TO_EMOTION = {
 }
 EMOTIONS = [ID_TO_EMOTION[i] for i in range(7)]
 
-# -----------------------------
-# Text utils & embeddings
-# -----------------------------
+# ---------------------------------------
+# Text processing utilities & embeddings
+# ---------------------------------------
 def simple_tokenize(s: str):
     s = s.lower()
     s = s.translate(str.maketrans("", "", string.punctuation))
@@ -191,7 +191,7 @@ def train_ann(X_train, y_train, X_val, y_val, epochs=12, batch_size=128, hidden=
     return model, hist.history
 
 # -----------------------------
-# Evaluation helpers
+# Model Evaluation helpers
 # -----------------------------
 def evaluate_classifier(name, clf, X_test, y_test):
     y_prob = clf.predict_proba(X_test)
