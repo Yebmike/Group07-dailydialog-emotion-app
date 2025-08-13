@@ -422,9 +422,9 @@ def run_app():
 
     # Final caption with icon (JPEG)
     icon_path = DATA_DIR / "2.jpg"  # Sabi
-    ICON_SIZE = 48
+    ICON_SIZE = 96
 
-    col_i, col_t = st.columns([1, 10])
+    col_i, col_t = st.columns([3, 10])
     with col_i:
         try:
             st.image(str(icon_path), width=ICON_SIZE)  # small icon
