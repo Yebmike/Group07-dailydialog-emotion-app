@@ -1,0 +1,69 @@
+{
+  "domains": {
+    "Ordinary Life": {
+      "description": "",
+      "slots": {}
+    },
+    "School Life": {
+      "description": "",
+      "slots": {}
+    },
+    "Culture & Education": {
+      "description": "",
+      "slots": {}
+    },
+    "Attitude & Emotion": {
+      "description": "",
+      "slots": {}
+    },
+    "Relationship": {
+      "description": "",
+      "slots": {}
+    },
+    "Tourism": {
+      "description": "",
+      "slots": {}
+    },
+    "Health": {
+      "description": "",
+      "slots": {}
+    },
+    "Work": {
+      "description": "",
+      "slots": {}
+    },
+    "Politics": {
+      "description": "",
+      "slots": {}
+    },
+    "Finance": {
+      "description": "",
+      "slots": {}
+    }
+  },
+  "intents": {
+    "inform": {
+      "description": ""
+    },
+    "question": {
+      "description": ""
+    },
+    "directive": {
+      "description": ""
+    },
+    "commissive": {
+      "description": ""
+    }
+  },
+  "state": {},
+  "dialogue_acts": {
+    "categorical": [],
+    "non-categorical": [],
+    "binary": [
+      "{'user': True, 'system': True, 'intent': 'commissive', 'domain': '', 'slot': ''}",
+      "{'user': True, 'system': True, 'intent': 'directive', 'domain': '', 'slot': ''}",
+      "{'user': True, 'system': True, 'intent': 'inform', 'domain': '', 'slot': ''}",
+      "{'user': True, 'system': True, 'intent': 'question', 'domain': '', 'slot': ''}"
+    ]
+  }
+}

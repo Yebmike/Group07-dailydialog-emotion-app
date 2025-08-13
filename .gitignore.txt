@@ -1,0 +1,40 @@
+# --- Python bytecode / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.dist-info/
+.pytest_cache/
+
+# --- Virtual environments
+.venv/
+venv/
+env/
+
+# --- Build / dist
+build/
+dist/
+.eggs/
+
+# --- OS cruft
+.DS_Store
+Thumbs.db
+
+# --- IDE settings
+.idea/
+.vscode/
+
+# --- Streamlit
+.streamlit/cache/
+.streamlit/secrets.toml
+
+# --- Training outputs / local runs
+artifacts/
+
+# --- Notebooks
+.ipynb_checkpoints/
+
+# Keep your dataset and image
+# (do NOT ignore the data folder)
+# data/
