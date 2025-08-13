@@ -427,7 +427,7 @@ def run_app():
     col_i, col_t = st.columns([1, 10])
     with col_i:
         try:
-            st.image(icon_path, width=ICON_SIZE)  # small icon
+            st.image(str(icon_path), width=ICON_SIZE)  # small icon
         except Exception:
             st.write("")  # ignore if missing
     with col_t:
