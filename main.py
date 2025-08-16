@@ -1,4 +1,3 @@
-
 import os
 import re
 import string
@@ -21,6 +20,7 @@ from sklearn.metrics import (
     classification_report, confusion_matrix,
     roc_auc_score, roc_curve, auc
 )
+from sklearn.utils.class_weight import compute_class_weight  # imbalance handling
 import joblib
 
 # Plots
@@ -33,13 +33,12 @@ from tensorflow.keras import layers
 
 # preparing path for github and streamlit
 from pathlib import Path
+
 # -----------------------------
 # Paths & constants
 # -----------------------------
-
 DATA_DIR = Path(__file__).parent / "data"
 DIALOGUES_JSON = DATA_DIR / "dialogues.json"
-
 
 # Canonical emotion set (7 classes)
 EMOTION_TO_ID = {
@@ -99,21 +98,7 @@ def build_embeddings(df: pd.DataFrame, glove_dim=100):
 def load_dailydialog_local(json_path: str = DIALOGUES_JSON) -> pd.DataFrame:
     """
     Load DailyDialog from a local dialogues.json created from the dataset.
-    Expected structure (typical):
-      [
-        {
-          "data_split": "train" | "validation" | "test",
-          "turns": [
-            {"utterance": "...", "emotion": "happiness" | 4 | ... },
-            ...
-          ]
-        },
-        ...
-      ]
-
-    We output a DataFrame with columns:
-      text: str  (utterance)
-      emotion: int in [0..6] using our canonical mapping
+    Output: DataFrame with columns: text (str), emotion (int 0..6)
     """
     if not os.path.isfile(json_path):
         raise FileNotFoundError(
@@ -132,12 +117,12 @@ def load_dailydialog_local(json_path: str = DIALOGUES_JSON) -> pd.DataFrame:
 
             # Normalize emotion to int id
             if isinstance(emo_val, int):
-                # already id-like; clamp to [0..6] just in case you are asking
                 emo_id = int(emo_val)
+                if emo_id == -1:            # <-- explicit -1 handling
+                    emo_id = 0
                 if emo_id not in ID_TO_EMOTION:
                     emo_id = 0
             else:
-                # string label; normalize and map
                 key = str(emo_val).strip().lower()
                 emo_id = EMOTION_TO_ID.get(key, 0)
 
@@ -150,15 +135,49 @@ def load_dailydialog_local(json_path: str = DIALOGUES_JSON) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 # -----------------------------
+# Imbalance helpers
+# -----------------------------
+def get_class_weights(y_train):
+    """Compute sklearn-style class weights as a dict {class_id: weight}."""
+    classes = np.unique(y_train)
+    weights = compute_class_weight(class_weight="balanced", classes=classes, y=y_train)
+    return {int(c): float(w) for c, w in zip(classes, weights)}
+
+def undersample_majority(X, y, majority_class=0, k=1.5, random_state=42):
+    """
+    Keep all minority examples. Cap the majority class at k × the largest minority count.
+    k=1.0 makes majority equal to the largest minority size.
+    Only use this on the training split.
+    """
+    rng = np.random.default_rng(random_state)
+    y = np.asarray(y)
+
+    counts = np.bincount(y, minlength=len(EMOTIONS))
+    minority_counts = [counts[i] for i in range(len(EMOTIONS)) if i != majority_class]
+    if not minority_counts:
+        return X, y
+
+    cap = int(k * max(minority_counts))
+    maj_idx = np.where(y == majority_class)[0]
+    keep_maj = rng.choice(maj_idx, size=min(cap, len(maj_idx)), replace=False)
+
+    keep_min = np.where(y != majority_class)[0]
+    keep = np.concatenate([keep_maj, keep_min])
+    keep.sort()
+
+    return X[keep], y[keep]
+
+# -----------------------------
 # Models
 # -----------------------------
-def train_logreg(X_train, y_train, C=2.0, max_iter=2000, random_state=42):
+def train_logreg(X_train, y_train, C=2.0, max_iter=2000, random_state=42, class_weight=None):
     clf = LogisticRegression(
         C=C,
         max_iter=max_iter,
         multi_class="multinomial",
         solver="lbfgs",
-        random_state=random_state
+        random_state=random_state,
+        class_weight=class_weight
     )
     clf.fit(X_train, y_train)
     return clf
@@ -179,14 +198,15 @@ def build_ann(input_dim: int, num_classes: int = 7, hidden=128, dropout=0.2, lr=
     )
     return model
 
-def train_ann(X_train, y_train, X_val, y_val, epochs=12, batch_size=128, hidden=128, dropout=0.2, lr=1e-3):
+def train_ann(X_train, y_train, X_val, y_val, epochs=12, batch_size=128, hidden=128, dropout=0.2, lr=1e-3, class_weight=None):
     model = build_ann(X_train.shape[1], len(EMOTIONS), hidden=hidden, dropout=dropout, lr=lr)
     hist = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
-        verbose=0
+        verbose=0,
+        class_weight=class_weight
     )
     return model, hist.history
 
@@ -237,7 +257,6 @@ def plot_confusion_matrix(cm, title):
         xlabel="Predicted label",
         title=title
     )
-    # annotate counts
     thresh = cm.max() / 2.0 if cm.max() > 0 else 0.5
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
@@ -278,9 +297,9 @@ def predict_with_glove(text: str, model, glove_dim=100):
 # Streamlit App
 # -----------------------------
 def run_app():
-    st.set_page_config(page_title="DailyDialog Emotion Classifier (Local JSON)", page_icon="🧠", layout="wide")
+    st.set_page_config(page_title="DailyDialog Emotion Classifier (Local JSON)", layout="wide")
     st.title("DailyDialog Emotion Detection • GloVe + LR / ANN")
-    st.caption(" A JSON data in ./data/dialogues.json, Comparing Logistic Regression and ANN.")
+    st.caption("A JSON data in ./data/dialogues.json. Comparing Logistic Regression and ANN.")
 
     with st.expander("Page Info"):
         st.markdown(
@@ -289,12 +308,13 @@ def run_app():
 **Classes:** no_emotion, anger, disgust, fear, happiness, sadness, surprise  
 **Embeddings:** GloVe (glove-wiki-gigaword) averaged per sentence  
 **Metrics:** Precision, Recall, F1, ROC-AUC (macro, micro)  
+**Imbalance:** Class weights and optional undersampling of `no_emotion`  
 """
         )
 
     # Path controls
     st.sidebar.header("Data path")
-    data_path = st.sidebar.text_input("dialogues.json path", DIALOGUES_JSON)
+    data_path = st.sidebar.text_input("dialogues.json path", str(DIALOGUES_JSON))
 
     # Data
     st.header("1) Load & Explore")
@@ -303,6 +323,7 @@ def run_app():
     except Exception as e:
         st.error(str(e))
         st.stop()
+    st.caption(f"Loaded {len(df)} utterances from {data_path}")
 
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -310,7 +331,15 @@ def run_app():
     with c2:
         st.metric("Total utterances", len(df))
         counts = pd.Series(df["emotion"]).map(ID_TO_EMOTION).value_counts().reindex(EMOTIONS, fill_value=0)
-        st.bar_chart(counts)
+
+        chart_type = st.selectbox("Class distribution chart", ["Bar", "Pie"], index=1)
+        if chart_type == "Bar":
+            st.bar_chart(counts)
+        else:
+            fig, ax = plt.subplots()
+            ax.pie(counts.values, labels=counts.index, autopct="%1.1f%%", startangle=90)
+            ax.axis("equal")
+            st.pyplot(fig)
 
     # Embeddings
     st.header("2) Build GloVe Embeddings")
@@ -323,9 +352,29 @@ def run_app():
     st.header("3) Train / Val / Test Split")
     test_size = st.slider("Test size", 0.1, 0.3, 0.2, 0.05)
     val_size = st.slider("Validation size (from train)", 0.05, 0.2, 0.1, 0.05)
-    X_train_full, X_test, y_train_full, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y)
-    X_train, X_val, y_train, y_val = train_test_split(X_train_full, y_train_full, test_size=val_size, random_state=42, stratify=y_train_full)
+    X_train_full, X_test, y_train_full, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_full, y_train_full, test_size=val_size, random_state=42, stratify=y_train_full
+    )
     st.write(f"Train: {X_train.shape[0]} | Val: {X_val.shape[0]} | Test: {X_test.shape[0]}")
+
+    # Imbalance handling
+    st.subheader("Imbalance handling")
+    use_weights = st.checkbox("Use class weights (recommended)", value=True)
+    cw = get_class_weights(y_train) if use_weights else None
+    if use_weights:
+        pretty = {ID_TO_EMOTION[k]: f"{v:.2f}" for k, v in cw.items()}
+        st.caption(f"Class weights: {pretty}")
+
+    use_under = st.checkbox("Undersample 'no_emotion' in training", value=False)
+    k_ratio = st.slider("Cap no_emotion at k × largest minority", 1.0, 3.0, 1.5, 0.5)
+
+    X_tr_bal, y_tr_bal = (X_train, y_train)
+    if use_under:
+        X_tr_bal, y_tr_bal = undersample_majority(X_train, y_train, majority_class=0, k=k_ratio)
+        st.caption(f"After undersampling: Train = {len(y_tr_bal)} (no_emotion capped at ~{k_ratio}× largest minority)")
 
     # Train models
     st.header("4) Train Models")
@@ -335,7 +384,7 @@ def run_app():
         c_val = st.number_input("C (inverse regularization)", min_value=0.01, max_value=10.0, value=2.0, step=0.25)
         if st.button("Train Logistic Regression"):
             with st.spinner("Training..."):
-                logreg = train_logreg(X_train, y_train, C=c_val)
+                logreg = train_logreg(X_tr_bal, y_tr_bal, C=c_val, class_weight=(cw if use_weights else None))
             st.session_state["logreg"] = logreg
             st.success("Logistic Regression trained.")
     with cr:
@@ -346,7 +395,11 @@ def run_app():
         drop = st.slider("Dropout", 0.0, 0.8, 0.2, 0.05)
         if st.button("Train ANN"):
             with st.spinner("Training..."):
-                ann, hist = train_ann(X_train, y_train, X_val, y_val, epochs=epochs, batch_size=batch, hidden=hidden, dropout=drop)
+                ann, hist = train_ann(
+                    X_tr_bal, y_tr_bal, X_val, y_val,
+                    epochs=epochs, batch_size=batch, hidden=hidden, dropout=drop,
+                    class_weight=(cw if use_weights else None)
+                )
             st.session_state["ann"] = ann
             st.session_state["ann_hist"] = hist
             st.success("ANN trained.")
@@ -378,6 +431,19 @@ def run_app():
                 c3.metric("Macro Recall", f"{metrics['report']['macro avg']['recall']:.3f}")
                 st.metric("ROC-AUC (macro)", f"{metrics['auc_macro']:.3f}" if not np.isnan(metrics["auc_macro"]) else "N/A")
                 st.metric("ROC-AUC (micro)", f"{metrics['auc_micro']:.3f}" if not np.isnan(metrics["auc_micro"]) else "N/A")
+
+                # Extra: metric excluding no_emotion
+                mask = (y_test != 0)
+                if mask.any():
+                    y_pred_full = np.argmax(metrics["y_prob"], axis=1)
+                    labels_no0 = [1, 2, 3, 4, 5, 6]
+                    names_no0 = [ID_TO_EMOTION[i] for i in labels_no0]
+                    rep_no0 = classification_report(
+                        y_test[mask], y_pred_full[mask],
+                        labels=labels_no0, target_names=names_no0,
+                        zero_division=0, output_dict=True
+                    )
+                    st.metric("Macro F1 (excluding no_emotion)", f"{rep_no0['macro avg']['f1-score']:.3f}")
 
                 # Report
                 rep_df = pd.DataFrame(metrics["report"]).T
@@ -421,19 +487,17 @@ def run_app():
                 st.bar_chart(pd.Series(probs, index=EMOTIONS))
 
     # Final caption with icon (JPEG)
-    icon_path = DATA_DIR / "2.jpg"  # Sabi
+    icon_path = DATA_DIR / "2.jpg"
     ICON_SIZE = 96
 
     col_i, col_t = st.columns([3, 20])
     with col_i:
         try:
-            st.image(str(icon_path), width=ICON_SIZE)  # small icon
+            st.image(str(icon_path), width=ICON_SIZE)
         except Exception:
-            st.write("")  # ignore if missing
+            st.write("")
     with col_t:
         st.caption("hallelujah!!! 🙌🙌🙌.")
-
-
 
 # -----------------------------
 # CLI Trainer
@@ -446,9 +510,17 @@ def run_cli():
 
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
+    # Compute class weights
+    cw = get_class_weights(ytr)
+    print("Class weights:", cw)
+
+    # Optional undersampling in CLI as well (fixed k=1.5 for consistency)
+    Xtr_bal, ytr_bal = undersample_majority(Xtr, ytr, majority_class=0, k=1.5)
+    print(f"CLI undersampling: train size {len(ytr)} -> {len(ytr_bal)}")
+
     # Logistic Regression
     print("Training Logistic Regression...")
-    lr = train_logreg(Xtr, ytr, C=2.0)
+    lr = train_logreg(Xtr_bal, ytr_bal, C=2.0, class_weight=cw)
     yprob_lr = lr.predict_proba(Xte)
     ypred_lr = np.argmax(yprob_lr, axis=1)
     rep_lr = classification_report(yte, ypred_lr, target_names=EMOTIONS, zero_division=0, output_dict=True)
@@ -459,7 +531,7 @@ def run_cli():
 
     # ANN
     print("Training ANN...")
-    ann, _ = train_ann(Xtr, ytr, Xte[:len(Xte)//5], yte[:len(yte)//5], epochs=12, batch_size=128)
+    ann, _ = train_ann(Xtr_bal, ytr_bal, Xte[:len(Xte)//5], yte[:len(yte)//5], epochs=12, batch_size=128, class_weight=cw)
     yprob_nn = ann.predict(Xte, verbose=0)
     ypred_nn = np.argmax(yprob_nn, axis=1)
     rep_nn = classification_report(yte, ypred_nn, target_names=EMOTIONS, zero_division=0, output_dict=True)
@@ -481,7 +553,6 @@ if __name__ == "__main__":
     if args.train_cli:
         run_cli()
     else:
-        # Let Streamlit take over when run via `streamlit run`.
         try:
             run_app()
         except SystemExit:
